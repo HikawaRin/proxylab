@@ -66,18 +66,22 @@ void proxy_error(int fd, char *cause, char *errnum,
 // parse_uri - parse URI into scheme://<host>:<port><abs_path>
 //              return 0 if success, 1 if failure
 int parse_uri(const char *uri, char *host, char *port, char *abs_path) { 
+  // default port 80
+  strncpy(port, "80\0", 3);
+
   char *it = strstr(uri, "://");
   if (it != NULL) { 
     // an absoluteURI
     it += 3;
     char *end = strstr(it, "/");
-    if (end == NULL) { strncpy(host, it, MAXLINE); }
+    if (end == NULL) { strncpy(host, it, strlen(it)+1); }
     else { strncpy(host, it, (size_t)(end-it)); }
 
     it = strstr(host, ":");
     if (it != NULL) { 
-      strncpy(port, it+1, MAXLINE); 
-      *it = '\0';
+      memset(port, 0, sizeof(char)*10);
+      strncpy(port, it+1, 10); 
+      memset(it, 0, sizeof(char)*strlen(it));
     }
 
     it = end;
@@ -86,24 +90,22 @@ int parse_uri(const char *uri, char *host, char *port, char *abs_path) {
     if (it == NULL) { return 1; }
   }
 
-  // port not specified, default 80
-  if (!strcmp(port, "")) { strncpy(port, "80\0", 3); }
-
   if (it == NULL) { strncpy(abs_path, "/\0", 2); }
-  else { strncpy(abs_path, it, MAXLINE); }
+  else { strncpy(abs_path, it, strlen(it)+1); }
 
   return 0;
 }
 
 void Transaction(int fd) { 
-  rio_t rio;
+  int clientfd;
+  rio_t server_rio, client_rio;
   char buf[MAXLINE]; 
   char method[MAXLINE], uri[MAXLINE], version[MAXLINE];
-  char host[MAXLINE], port[MAXLINE], abs_path[MAXLINE];
+  char host[MAXLINE-9], port[10], abs_path[MAXLINE-16];
 
-  Rio_readinitb(&rio, fd);
+  Rio_readinitb(&server_rio, fd);
   // read Request-Line
-  if (!Rio_readlineb(&rio, buf, MAXLINE)) { 
+  if (!Rio_readlineb(&server_rio, buf, MAXLINE)) { 
     Close(fd); return;
   }
   sscanf(buf, "%s %s %s", method, uri, version); // parse Request-Line
@@ -118,4 +120,42 @@ void Transaction(int fd) {
     return; 
   }
 
+  clientfd = Open_clientfd(host, port);
+  Rio_readinitb(&client_rio, clientfd);
+  sprintf(buf, "GET %s HTTP/1.0\r\n", abs_path);
+  Rio_writen(clientfd, buf, strlen(buf));
+  // send out Request-Header
+  sprintf(buf, "Host: %s\r\n", host);
+  Rio_writen(clientfd, buf, strlen(buf));
+
+  sprintf(buf, "%s", user_agent_hdr);
+  Rio_writen(clientfd, buf, strlen(buf));
+  sprintf(buf, "Connection: close\r\n");
+  Rio_writen(clientfd, buf, strlen(buf));
+  sprintf(buf, "Proxy-Connection: close\r\n");
+  Rio_writen(clientfd, buf, strlen(buf));
+
+  // forward additional request headers
+  do {  
+    Rio_readlineb(&server_rio, buf, MAXLINE);
+    Rio_writen(clientfd, buf, strlen(buf));
+  } while (strcmp(buf, "\r\n"));
+
+  long content_length;
+  // send back response
+  do {
+    Rio_readlineb(&client_rio, buf, MAXLINE);
+    if (!strncmp(buf, "Content-length: ", 16)) { 
+      content_length = strtol(buf+16, NULL, 0);
+    }
+    Rio_writen(fd, buf, strlen(buf));
+  } while (strcmp(buf, "\r\n"));
+
+  char *tmp = (char *)malloc(sizeof(char)*content_length);
+  Rio_readnb(&client_rio, tmp, content_length);
+  Rio_writen(fd, tmp, content_length);
+  free(tmp);
+
+  Close(clientfd);
+  Close(fd);
 }
