@@ -102,10 +102,15 @@ void Transaction(int fd) {
   char buf[MAXLINE]; 
   char method[MAXLINE], uri[MAXLINE], version[MAXLINE];
   char host[MAXLINE-9], port[10], abs_path[MAXLINE-16];
+  sigset_t mask;
+
+  Sigemptyset(&mask);
+  Sigaddset(&mask, SIGPIPE);
+  Sigprocmask(SIG_BLOCK, &mask, NULL);
 
   Rio_readinitb(&server_rio, fd);
   // read Request-Line
-  if (!Rio_readlineb(&server_rio, buf, MAXLINE)) { 
+  if (Rio_readlineb(&server_rio, buf, MAXLINE) < 1) { 
     Close(fd); return;
   }
   sscanf(buf, "%s %s %s", method, uri, version); // parse Request-Line
@@ -123,37 +128,49 @@ void Transaction(int fd) {
   clientfd = Open_clientfd(host, port);
   Rio_readinitb(&client_rio, clientfd);
   sprintf(buf, "GET %s HTTP/1.0\r\n", abs_path);
-  Rio_writen(clientfd, buf, strlen(buf));
+  if (rio_writen(clientfd, buf, strlen(buf)) != strlen(buf)) { 
+    Close(clientfd); Close(fd); return;
+  }
   // send out Request-Header
   sprintf(buf, "Host: %s\r\n", host);
-  Rio_writen(clientfd, buf, strlen(buf));
+  if (rio_writen(clientfd, buf, strlen(buf)) != strlen(buf)) { 
+    Close(clientfd); Close(fd); return;
+  }
 
-  sprintf(buf, "%s", user_agent_hdr);
-  Rio_writen(clientfd, buf, strlen(buf));
-  sprintf(buf, "Connection: close\r\n");
-  Rio_writen(clientfd, buf, strlen(buf));
-  sprintf(buf, "Proxy-Connection: close\r\n");
-  Rio_writen(clientfd, buf, strlen(buf));
+  sprintf(buf, "%sConnection: close\r\nProxy-Connection: close\r\n", user_agent_hdr);
+  if (rio_writen(clientfd, buf, strlen(buf)) != strlen(buf)) { 
+    Close(clientfd); Close(fd); return;
+  }
+  // sprintf(buf, "Connection: close\r\n");
+  // Rio_writen(clientfd, buf, strlen(buf));
+  // sprintf(buf, "Proxy-Connection: close\r\n");
+  // Rio_writen(clientfd, buf, strlen(buf));
 
   // forward additional request headers
   do {  
-    Rio_readlineb(&server_rio, buf, MAXLINE);
-    Rio_writen(clientfd, buf, strlen(buf));
+    if (Rio_readlineb(&server_rio, buf, MAXLINE) < 1
+        || rio_writen(clientfd, buf, strlen(buf)) != strlen(buf)) { 
+      Close(clientfd); Close(fd); return;
+    }
   } while (strcmp(buf, "\r\n"));
 
   long content_length;
   // send back response
   do {
-    Rio_readlineb(&client_rio, buf, MAXLINE);
+    if (Rio_readlineb(&client_rio, buf, MAXLINE) < 1
+        && rio_writen(fd, buf, strlen(buf)) != strlen(buf)) { 
+      Close(clientfd); Close(fd); return;
+    }
+
     if (!strncmp(buf, "Content-length: ", 16)) { 
       content_length = strtol(buf+16, NULL, 0);
     }
-    Rio_writen(fd, buf, strlen(buf));
   } while (strcmp(buf, "\r\n"));
 
   char *tmp = (char *)malloc(sizeof(char)*content_length);
-  Rio_readnb(&client_rio, tmp, content_length);
-  Rio_writen(fd, tmp, content_length);
+  if (Rio_readnb(&client_rio, tmp, content_length) > 0) { 
+    rio_writen(fd, tmp, content_length);
+  }
   free(tmp);
 
   Close(clientfd);
