@@ -9,11 +9,13 @@
 static const char *user_agent_hdr = "User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:10.0.3) Gecko/20120305 Firefox/10.0.3\r\n";
 
 void Transaction(int fd);
+void *thread_transaction(void *vargp);
 
 int main(int argc, char **argv) { 
-  int listenfd, connfd;
+  int listenfd;
   socklen_t clientlen;
   struct sockaddr_storage clientaddr;
+  pthread_t tid;
 
   if (argc != 2) { 
     fprintf(stderr, "usage: %s <port>\n", argv[0]);
@@ -22,9 +24,11 @@ int main(int argc, char **argv) {
   listenfd = Open_listenfd(argv[1]);
   while (1) { 
     clientlen = sizeof(clientaddr);
-    connfd = Accept(listenfd, (SA *)&clientaddr, &clientlen);
+    int *connfd_ptr = (int *)Malloc(sizeof(int));
+    *connfd_ptr = Accept(listenfd, (SA *)&clientaddr, &clientlen);
     
-    Transaction(connfd); 
+    // Transaction(connfd); // iterator server
+    Pthread_create(&tid, NULL, thread_transaction, connfd_ptr);
   }
 
   return 0;
@@ -141,10 +145,6 @@ void Transaction(int fd) {
   if (rio_writen(clientfd, buf, strlen(buf)) != strlen(buf)) { 
     Close(clientfd); Close(fd); return;
   }
-  // sprintf(buf, "Connection: close\r\n");
-  // Rio_writen(clientfd, buf, strlen(buf));
-  // sprintf(buf, "Proxy-Connection: close\r\n");
-  // Rio_writen(clientfd, buf, strlen(buf));
 
   // forward additional request headers
   do {  
@@ -167,12 +167,22 @@ void Transaction(int fd) {
     }
   } while (strcmp(buf, "\r\n"));
 
-  char *tmp = (char *)malloc(sizeof(char)*content_length);
+  char *tmp = (char *)Malloc(sizeof(char)*content_length);
   if (Rio_readnb(&client_rio, tmp, content_length) > 0) { 
     rio_writen(fd, tmp, content_length);
   }
-  free(tmp);
+  Free(tmp);
 
   Close(clientfd);
   Close(fd);
 }
+
+void *thread_transaction(void *vargp) { 
+  int fd = *((int *)vargp);
+  Pthread_detach(pthread_self());
+  Free(vargp);
+
+  Transaction(fd);
+  return NULL;
+}
+
