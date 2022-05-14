@@ -44,25 +44,27 @@ int main(int argc, char **argv) {
 //    longmsg - error detail
 void proxy_error(int fd, char *cause, char *errnum,
     char *shortmsg, char *longmsg) { 
-  char buf[MAXLINE];
-  
+  char buf[MAXLINE], body[MAX_OBJECT_SIZE];
+  int body_size;
+
+  memset(body, 0, MAX_OBJECT_SIZE);
+  /* build the HTTP response body */
+  sprintf(body, "<html><title>Proxy Error</title>");
+  sprintf(body, "%s<body bgcolor=""ffffff"">\r\n", body);
+  sprintf(body, "%s%s: %s\r\n", body, errnum, shortmsg);
+  sprintf(body, "%s<p>%s: %s\r\n", body, longmsg, cause);
+  sprintf(body, "%s<hr><em>The Hikawa Proxy</em>\r\n", body);
+  body_size = strlen(body);
+ 
   /* Print the HTTP response headers */
   sprintf(buf, "HTTP/1.0 %s %s\r\n", errnum, shortmsg);
   Rio_writen(fd, buf, strlen(buf));
-  sprintf(buf, "Content-type: text/html\r\n\r\n");
+  sprintf(buf, "Content-type: text/html\r\n");
+  Rio_writen(fd, buf, strlen(buf));
+  sprintf(buf, "Content-length: %d\r\n\r\n", body_size);
   Rio_writen(fd, buf, strlen(buf));
 
-  /* Print the HTTP response body */
-  sprintf(buf, "<html><title>Proxy Error</title>");
-  Rio_writen(fd, buf, strlen(buf));
-  sprintf(buf, "<body bgcolor=""ffffff"">\r\n");
-  Rio_writen(fd, buf, strlen(buf));
-  sprintf(buf, "%s: %s\r\n", errnum, shortmsg);
-  Rio_writen(fd, buf, strlen(buf));
-  sprintf(buf, "<p>%s: %s\r\n", longmsg, cause);
-  Rio_writen(fd, buf, strlen(buf));
-  sprintf(buf, "<hr><em>The Hikawa Proxy</em>\r\n");
-  Rio_writen(fd, buf, strlen(buf));
+  Rio_writen(fd, body, body_size);
 
   Close(fd);
 }
